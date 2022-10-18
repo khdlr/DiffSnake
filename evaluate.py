@@ -1,59 +1,58 @@
-import sys
-import yaml
-import json
 from functools import partial
-from pathlib import Path
 import jax
 import jax.numpy as jnp
-import numpy as np
-import wandb
-from tqdm import tqdm
-from PIL import Image
 
-from data_loading import get_loader
-from lib import losses, utils, logging, models
-from lib.utils import TrainingState, prep, load_state
+from lib import losses
+from lib.utils import prep
+from lib.diffusion import ddim_sample
+from einops import repeat
+
+from jax.experimental.host_callback import id_print
 
 
 METRICS = dict(
     mae=losses.mae,
     rmse=losses.rmse,
-    forward_mae=losses.forward_mae,
-    backward_mae=losses.backward_mae,
-    forward_rmse=losses.forward_rmse,
-    backward_rmse=losses.backward_rmse,
     symmetric_mae=losses.symmetric_mae,
     symmetric_rmse=losses.symmetric_rmse,
 )
 
 
 @partial(jax.jit, static_argnums=3)
-def test_step(batch, state, key, net):
+def test_step(batch, state, key, model):
     imagery, mask, contour = prep(batch)
+    B = imagery.shape[0]
+    S = 4
 
-    terms, _ = net(state.params, state.buffers, key, imagery, is_training=False)
+    original_contour = contour
+    contour = repeat(contour, 'B T C -> B S T C', S=S)
+    ts = repeat(jnp.linspace(0, 1000, 50), 'T -> T B', B=B)
+    init = jax.random.normal(key, contour.shape)
+
+    img_features = model.get_features(state.params, imagery)
+    # sample_single = partial(ddim_sample, model, state.params, img_features, ts)
+    # trajectories = jax.vmap(sample_single, in_axes=1, out_axes=1)(init)
+    trajectories = ddim_sample(model, state.params, img_features, ts, init)
 
     terms = {
-        **terms,
         "imagery": imagery,
         "contour": contour,
         "mask": mask,
+        'snake_steps': trajectories,
+        'snake': trajectories[:, :, -1],
     }
-
-    if "snake" not in terms:
-        terms["snake"] = utils.snakify(terms["segmentation"], contour.shape[-2])
-    if "snake_steps" not in terms:
-        terms["snake_steps"] = [terms["snake"]]
 
     # Convert from normalized to to pixel coordinates
     scale = imagery.shape[1] / 2
     for key in ["snake", "snake_steps", "contour"]:
         terms[key] = jax.tree_map(lambda x: scale * (1.0 + x), terms[key])
 
+    # TODO: uncertainty measures
     metrics = {}
     for m in METRICS:
-        metrics[m] = losses.call_loss(METRICS[m], terms)[0]
+        metrics[m] = jnp.mean(jax.vmap(partial(losses.call_loss, METRICS[m]))(terms)[0])
 
+    terms['contour'] = jax.tree_map(lambda x: scale * (1.0 + x), original_contour)
     return metrics, terms
 
 

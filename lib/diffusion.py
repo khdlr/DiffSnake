@@ -1,37 +1,47 @@
 import jax
 import jax.numpy as jnp
 from . import config
+import math
+from einops import rearrange
+
+
 
 def get_alpha(t):
   schedule = config.diffusion.alpha_schedule
-  x = t / config.diffusion.steps_train
+  x = (t / (1 + config.diffusion.steps_train))
 
+  alpha = 0
   if schedule == 'linear':
-    return 1 - x
+    alpha = 1 - x
   elif schedule == 'circular':
-    return 1 - jnp.sqrt(2*x - x*x)
+    alpha = 1 - jnp.sqrt(2*x - x*x)
   elif schedule == 'sinusoidal':
-    return jnp.sin(jnp.pi / 2 * (1 - x))
+    alpha = jnp.sin(jnp.pi / 2 * (1 - x))
   elif schedule == 'cosine':
-    return 0.5 + 0.5 * jnp.cos(x * jnp.pi)
+    alpha = 0.5 + 0.5 * jnp.cos(x * jnp.pi)
   else:
     raise ValueError(f'{config.diffusion.alpha_schedule!r}')
+  return alpha[..., None, None]
 
 
-def sample(model, state, imgs, keys):
-  ts = 
-
-  img_features = model.get_features(state.params, imgs)
-
+# DDIM sampling procedure for a single image
+def ddim_sample(model, params, img_features, timesteps, init):
   # DDIM inference step
   def inference_step(x_t, step_vars):
-    t, tm1, key = ts
+    t, tm1 = step_vars
     a_t, a_tm1 = get_alpha(t), get_alpha(tm1)
 
-    eps = model.(
+    eps = model.predict_next(params, x_t, img_features, t)
+    x0_est = x_t - eps * jnp.sqrt(1 - a_t)
+    x_tm1 = jnp.sqrt(a_tm1) * x0_est + jnp.sqrt(1 - a_tm1) * eps
 
-    x_tm1 = jnp.sqrt(a_tm1) * (x_t - jnp.sqrt(1 - a_t) * 
+    # Clipping
+    x_tm1 = jnp.clip(x_tm1, -1, 1)
 
+    return x_tm1, x_tm1
 
-    return x_t, x_t
-  jax.lax.scan
+  step_vars = (timesteps[:-1], timesteps[1:])
+  # Vmap over samples axis
+  inference_step = jax.vmap(inference_step, in_axes=[1, None])
+  final, steps = jax.lax.scan(inference_step, init, step_vars)
+  return rearrange(steps, 'diffusion_step B S T C -> B S diffusion_step T C')

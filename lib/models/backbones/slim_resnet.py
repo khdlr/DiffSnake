@@ -17,23 +17,16 @@
 import types
 from typing import Mapping, Optional, Sequence, Union, Any
 
-from haiku._src import basic
-from haiku._src import batch_norm
-from haiku._src import conv
-from haiku._src import module
-from haiku._src import pool
 import jax
 import jax.numpy as jnp
-
-# If forking replace this block with `import haiku as hk`.
-hk = types.ModuleType("haiku")
-hk.Module = module.Module
-hk.BatchNorm = batch_norm.BatchNorm
-hk.Conv2D = conv.Conv2D
-hk.Linear = basic.Linear
-hk.max_pool = pool.max_pool
-del basic, batch_norm, conv, module, pool
+import haiku as hk
 FloatStrOrBool = Union[str, float, bool]
+
+
+def LayerNorm(**kwargs):
+    return hk.LayerNorm(axis=-1, param_axis=-1,
+        create_scale=True, create_offset=True, **kwargs)
+
 
 
 class BlockV1(hk.Module):
@@ -65,7 +58,7 @@ class BlockV1(hk.Module):
           padding="SAME",
           name="shortcut_conv")
 
-      self.proj_batchnorm = hk.BatchNorm(name="shortcut_batchnorm", **bn_config)
+      self.proj_layernorm = LayerNorm(name="shortcut_layernorm")
 
     channel_div = 4 if bottleneck else 1
     conv_0 = hk.Conv2D(
@@ -75,7 +68,7 @@ class BlockV1(hk.Module):
         with_bias=False,
         padding="SAME",
         name="conv_0")
-    bn_0 = hk.BatchNorm(name="batchnorm_0", **bn_config)
+    bn_0 = LayerNorm(name="layernorm_0")
 
     conv_1 = hk.Conv2D(
         output_channels=channels // channel_div,
@@ -85,7 +78,7 @@ class BlockV1(hk.Module):
         padding="SAME",
         name="conv_1")
 
-    bn_1 = hk.BatchNorm(name="batchnorm_1", **bn_config)
+    bn_1 = LayerNorm(name="layernorm_1")
     layers = ((conv_0, bn_0), (conv_1, bn_1))
 
     if bottleneck:
@@ -97,21 +90,21 @@ class BlockV1(hk.Module):
           padding="SAME",
           name="conv_2")
 
-      bn_2 = hk.BatchNorm(name="batchnorm_2", scale_init=jnp.zeros, **bn_config)
+      bn_2 = LayerNorm(name="layernorm_2", scale_init=jnp.zeros)
       layers = layers + ((conv_2, bn_2),)
 
     self.layers = layers
 
-  def __call__(self, inputs, is_training, test_local_stats):
+  def __call__(self, inputs):
     out = shortcut = inputs
 
     if self.use_projection:
       shortcut = self.proj_conv(shortcut)
-      shortcut = self.proj_batchnorm(shortcut, is_training, test_local_stats)
+      shortcut = self.proj_layernorm(shortcut)
 
     for i, (conv_i, bn_i) in enumerate(self.layers):
       out = conv_i(out)
-      out = bn_i(out, is_training, test_local_stats)
+      out = bn_i(out)
       if i < len(self.layers) - 1:  # Don't apply relu on last layer
         out = jax.nn.relu(out)
 
@@ -155,7 +148,7 @@ class BlockV2(hk.Module):
         padding="SAME",
         name="conv_0")
 
-    bn_0 = hk.BatchNorm(name="batchnorm_0", **bn_config)
+    bn_0 = LayerNorm(name="layernorm_0")
 
     conv_1 = hk.Conv2D(
         output_channels=channels // channel_div,
@@ -165,7 +158,7 @@ class BlockV2(hk.Module):
         padding="SAME",
         name="conv_1")
 
-    bn_1 = hk.BatchNorm(name="batchnorm_1", **bn_config)
+    bn_1 = LayerNorm(name="layernorm_1")
     layers = ((conv_0, bn_0), (conv_1, bn_1))
 
     if bottleneck:
@@ -179,16 +172,16 @@ class BlockV2(hk.Module):
 
       # NOTE: Some implementations of SlimResNet50 v2 suggest initializing
       # gamma/scale here to zeros.
-      bn_2 = hk.BatchNorm(name="batchnorm_2", **bn_config)
+      bn_2 = LayerNorm(name="layernorm_2")
       layers = layers + ((conv_2, bn_2),)
 
     self.layers = layers
 
-  def __call__(self, inputs, is_training, test_local_stats):
+  def __call__(self, inputs):
     x = shortcut = inputs
 
     for i, (conv_i, bn_i) in enumerate(self.layers):
-      x = bn_i(x, is_training, test_local_stats)
+      x = bn_i(x)
       x = jax.nn.relu(x)
       if i == 0 and self.use_projection:
         shortcut = self.proj_conv(x)
@@ -225,10 +218,10 @@ class BlockGroup(hk.Module):
                     bn_config=bn_config,
                     name="block_%d" % (i)))
 
-  def __call__(self, inputs, is_training, test_local_stats):
+  def __call__(self, inputs):
     out = inputs
     for block in self.blocks:
-      out = block(out, is_training, test_local_stats)
+      out = block(out)
     return out
 
 
@@ -344,8 +337,8 @@ class SlimResNet(hk.Module):
     self.initial_conv = hk.Conv2D(**initial_conv_config)
 
     if not self.resnet_v2:
-      self.initial_batchnorm = hk.BatchNorm(name="initial_batchnorm",
-                                            **bn_config)
+      self.initial_layernorm = LayerNorm(name="initial_layernorm")
+                                            
 
     self.block_groups = []
     strides = (1, 2, 2, 2)
@@ -361,11 +354,11 @@ class SlimResNet(hk.Module):
                      name="block_group_%d" % (i)))
 
 
-  def __call__(self, inputs, is_training=False, test_local_stats=False):
+  def __call__(self, inputs):
     out = inputs
     out = self.initial_conv(out)
     if not self.resnet_v2:
-      out = self.initial_batchnorm(out, is_training, test_local_stats)
+      out = self.initial_layernorm(out)
       out = jax.nn.relu(out)
 
     out = hk.max_pool(out,
@@ -375,7 +368,7 @@ class SlimResNet(hk.Module):
 
     xs = []
     for block_group in self.block_groups:
-      out = block_group(out, is_training, test_local_stats)
+      out = block_group(out)
       xs.append(out)
 
     return xs

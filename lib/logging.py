@@ -84,9 +84,10 @@ def log_anim(data, tag, step):
     truth = data["contour"]
     gtpath = make_path_string(truth)
 
-    pred = list(data["snake_steps"])
-    pred = pred + [pred[-1], pred[-1]]
-    path_html = animated_path(pred)
+    path_htmls = []
+    for sample in data['snake_steps']:
+      path_htmls.append(animated_path(sample))
+    path_html = '\n'.join(path_htmls)
 
     html = f"""
     <!DOCTYPE html>
@@ -113,9 +114,11 @@ def make_path_string(vertices):
 
 def animated_path(paths):
     pathvalues = ";".join(make_path_string(path) for path in paths)
-    keytimes = ";".join(f"{x:.2f}" for x in np.linspace(0, 1, len(paths)))
+    keytimes = np.linspace(0, 0.8, len(paths))
+    keytimes[-1] = 1.0
+    keytimes = ";".join(f"{x:.4f}" for x in keytimes)
     return f"""<path fill="none" stroke="rgb(255, 0, 0)" stroke-width="1">
-          <animate attributeName="d" values="{pathvalues}" keyTimes="{keytimes}" dur="3s" repeatCount="indefinite" />
+          <animate attributeName="d" values="{pathvalues}" keyTimes="{keytimes}" dur="10s" repeatCount="indefinite" />
           </path>
           """
 

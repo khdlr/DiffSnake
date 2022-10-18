@@ -36,30 +36,27 @@ def train_step(batch, state, key, net):
   _, optimizer = get_optimizer()
   diff = config.diffusion
 
-  aug_key, model_key1, model_key2, time_key, eps_key = jax.random.split(key, 5)
+  aug_key, time_key, eps_key = jax.random.split(key, 3)
   img, mask, contour = prep(batch, aug_key, augment=True)
   B, H, W, C = img.shape
 
   t = jax.random.randint(time_key, [B, diff.snakes_per_image//2], 1, diff.steps_train)
   t = jnp.concatenate([t, diff.steps_train + 1 - t], axis=1)
-  t = rearrange(t, 'B S -> B S 1 1')
 
   x_0 = repeat(contour, 'B T C -> B S T C', S=diff.snakes_per_image)
   alpha = diffusion.get_alpha(t)
   eps = jax.random.normal(eps_key, x_0.shape)
-
   x_t = x_0 * jnp.sqrt(alpha) + eps * jnp.sqrt(1. - alpha)
   
   def get_loss(params):
-    img_features = net.get_features(params, model_key1, img)
+    img_features = net.get_features(params, img)
     # TODO: Dropout?
     # img_features = [nn.channel_dropout(f, 0., 5) for f in img_features]
 
-    def predict_single(t, x_t, model_key):
-      return net.predict_next(params, model_key, x_t, img_features, t)
+    def predict_single(x_t, t):
+      return net.predict_next(params, x_t, img_features, t)
 
-    snake_keys = jax.random.split(model_key2, t.shape[0])
-    predictions = jax.vmap(predict_single)(t, x_t, snake_keys)
+    predictions = jax.vmap(predict_single, in_axes=[1, 1], out_axes=1)(x_t, t)
 
     loss = jnp.mean(jnp.square(eps - predictions))
 
@@ -137,7 +134,7 @@ if __name__ == '__main__':
         # Validate
         val_key = persistent_val_key
         val_metrics = {}
-        for step, batch in enumerate(val_loader):
+        for step, batch in enumerate(tqdm(val_loader)):
             val_key, subkey = jax.random.split(val_key)
             metrics, out = test_step(batch, state, subkey, net)
 
@@ -147,11 +144,5 @@ if __name__ == '__main__':
 
             out = jax.tree_map(lambda x: x[0], out) # Select first example from batch
             logging.log_anim(out, f"Animated/{step}", epoch)
-            if 'segmentation' in out:
-                logging.log_segmentation(out, f'Segmentation/{step}', epoch)
-            if 'offsets' in out:
-                logging.log_offset_field(out, f'Offsets/{step}', epoch)
-            if 'edge' in out:
-                logging.log_edge(out, f'Edge/{step}', epoch)
 
         logging.log_metrics(val_metrics, 'val', epoch)
