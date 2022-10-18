@@ -1,152 +1,138 @@
 import yaml
-import pickle
 from pathlib import Path
 
 import numpy as np
 import jax
 import jax.numpy as jnp
-import haiku as hk
 import optax
-from data_loading import get_loader
+from data_loading import get_loader 
 from functools import partial
+from collections import defaultdict
 
 import wandb
 from tqdm import tqdm
 
 import sys
-import augmax
-
-from lib import utils, losses, logging, models
+from munch import munchify
+from lib import utils, losses, logging, models, config, diffusion
 from lib.utils import TrainingState, prep, changed_state, save_state
+import lib.models.nnutils as nn
 from evaluate import test_step, METRICS
+from einops import rearrange, repeat
 
-from jax.config import config
-
-config.update("jax_numpy_rank_promotion", "raise")
-
+from jax.config import config as jax_config
+jax_config.update("jax_numpy_rank_promotion", "raise")
 
 PATIENCE = 100
 
-
 def get_optimizer():
-    lr_schedule = optax.warmup_cosine_decay_schedule(
-        init_value=1e-7,
-        peak_value=1e-3,
-        warmup_steps=10 * 487,
-        decay_steps=(500 - 10) * 487,
-        end_value=4e-5,
-    )
-    return optax.adam(lr_schedule, b1=0.5, b2=0.99)
+  conf = config.opt
+  lr_schedule = getattr(optax, conf.schedule_type)(**conf.schedule)
+  return getattr(optax, conf.type)(lr_schedule, **conf.args)
 
 
 @partial(jax.jit, static_argnums=3)
 def train_step(batch, state, key, net):
-    _, optimizer = get_optimizer()
+  _, optimizer = get_optimizer()
+  diff = config.diffusion
 
-    aug_key, model_key = jax.random.split(key)
-    img, mask, contour = prep(batch, aug_key, augment=True)
+  aug_key, model_key1, model_key2, time_key, eps_key = jax.random.split(key, 5)
+  img, mask, contour = prep(batch, aug_key, augment=True)
+  B, H, W, C = img.shape
 
-    def calculate_loss(params):
-        terms, buffers = net(params, state.buffers, model_key, img, is_training=True)
-        terms = {**terms, "mask": mask, "contour": contour}
-        loss, loss_terms = losses.call_loss(loss_fn, terms)
+  t = jax.random.randint(time_key, [B, diff.snakes_per_image//2], 1, diff.steps_train)
+  t = jnp.concatenate([t, diff.steps_train + 1 - t], axis=1)
+  t = rearrange(t, 'B S -> B S 1 1')
 
-        return loss, (buffers, terms, loss_terms)
+  x_0 = repeat(contour, 'B T C -> B S T C', S=diff.snakes_per_image)
+  alpha = diffusion.get_alpha(t)
+  eps = jax.random.normal(eps_key, x_0.shape)
 
-    (loss, (buffers, terms, metrics)), gradients = jax.value_and_grad(
-        calculate_loss, has_aux=True
-    )(state.params)
-    updates, new_opt = optimizer(gradients, state.opt, state.params)
-    new_params = optax.apply_updates(state.params, updates)
+  x_t = x_0 * jnp.sqrt(alpha) + eps * jnp.sqrt(1. - alpha)
+  
+  def get_loss(params):
+    img_features = net.get_features(params, model_key1, img)
+    # TODO: Dropout?
+    # img_features = [nn.channel_dropout(f, 0., 5) for f in img_features]
 
-    terms = {
-        **terms,
-        "mask": mask,
-        "contour": contour,
-        "imagery": img,
-    }
+    def predict_single(t, x_t, model_key):
+      return net.predict_next(params, model_key, x_t, img_features, t)
 
-    if "snake" not in terms:
-        terms["snake"] = utils.snakify(terms["segmentation"][:1], contour.shape[-2])
-        terms["contour"] = terms["contour"][:1]
-    if "snake_steps" not in terms:
-        terms["snake_steps"] = [terms["snake"]]
+    snake_keys = jax.random.split(model_key2, t.shape[0])
+    predictions = jax.vmap(predict_single)(t, x_t, snake_keys)
 
-    # Convert from normalized to to pixel coordinates
-    scale = img.shape[1] / 2
-    for key in ["snake", "snake_steps", "contour"]:
-        terms[key] = jax.tree_map(lambda x: scale * (1.0 + x), terms[key])
+    loss = jnp.mean(jnp.square(eps - predictions))
 
-    for m in METRICS:
-        metrics[m] = jnp.mean(losses.call_loss(METRICS[m], terms)[0])
+    return loss
 
-    return (
-        metrics,
-        terms,
-        changed_state(
-            state,
-            params=new_params,
-            buffers=buffers,
-            opt=new_opt,
-        ),
-    )
+  loss, gradients = jax.value_and_grad(get_loss)(state.params)
+  updates, new_opt = optimizer(gradients, state.opt, state.params)
+  new_params = optax.apply_updates(state.params, updates)
+
+  terms = {
+      'loss': loss,
+      'mask': mask,
+      'contour': contour,
+      'imagery': img,
+  }
+
+  # Convert from normalized to to pixel coordinates
+
+  return terms, changed_state(state,
+      params=new_params,
+      opt=new_opt,
+  )
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] != "-f":
+if __name__ == '__main__':
+    if len(sys.argv) < 2 or sys.argv[1] != '-f':
         utils.assert_git_clean()
     train_key = jax.random.PRNGKey(42)
     persistent_val_key = jax.random.PRNGKey(27)
 
-    config = yaml.load(open("config.yml"), Loader=yaml.SafeLoader)
-    # Don't do this at home, kids!
-    loss_fn = eval(config["loss_function"], losses.__dict__)
+    config.update(munchify(yaml.load(open('config.yml'), Loader=yaml.SafeLoader)))
 
     # initialize data loading
     train_key, subkey = jax.random.split(train_key)
-    B = config["batch_size"]
-    train_loader = get_loader(B, 4, "train", config, subkey)
-    val_loader = get_loader(4, 1, "validation", config, None, subtiles=False)
+    B = config.batch_size
+    train_loader = get_loader(B, 4, 'train', config, subkey)
+    val_loader   = get_loader(4, 1, 'validation', config, None, subtiles=False)
 
-    img, *_ = prep(next(iter(train_loader)))
-    S, params, buffers = models.get_model(config, img)
+    img, mask, contour = prep(next(iter(train_loader)))
+    S, params = models.get_model(contour, img, jnp.zeros([img.shape[0]]))
 
     # Initialize model and optimizer state
     opt_init, _ = get_optimizer()
-    state = TrainingState(params=params, buffers=buffers, opt=opt_init(params))
+    state = TrainingState(params=params, opt=opt_init(params))
     net = S.apply
 
     running_min = np.inf
     last_improvement = 0
-    wandb.init(project=f'Deep Snake {config["dataset"]}', config=config)
+    wandb.init(project=f'Snake Diffusion', config=config)
 
-    run_dir = Path(f"runs/{wandb.run.id}/")
+    run_dir = Path(f'runs/{wandb.run.id}/')
     run_dir.mkdir(parents=True)
-    config["run_id"] = wandb.run.id
-    with open(run_dir / "config.yml", "w") as f:
+    config.run_id = wandb.run.id
+    with open(run_dir / 'config.yml', 'w') as f:
         f.write(yaml.dump(config, default_flow_style=False))
 
     for epoch in range(1, 501):
-        wandb.log({f"epoch": epoch}, step=epoch)
-        prog = tqdm(train_loader, desc=f"Ep {epoch} Trn")
-        trn_metrics = {}
+        wandb.log({f'epoch': epoch}, step=epoch)
+        prog = tqdm(train_loader, desc=f'Ep {epoch} Trn')
+        trn_metrics = defaultdict(list)
         loss_ary = None
         for step, batch in enumerate(prog, 1):
             train_key, subkey = jax.random.split(train_key)
-            metrics, terms, state = train_step(batch, state, subkey, net)
+            terms, state = train_step(batch, state, subkey, net)
+            trn_metrics['loss'].append(terms['loss'])
 
-            for m in metrics:
-                if m not in trn_metrics:
-                    trn_metrics[m] = []
-                trn_metrics[m].append(metrics[m])
-
-        logging.log_metrics(trn_metrics, "trn", epoch, do_print=False)
+        logging.log_metrics(trn_metrics, 'trn', epoch, do_print=False)
 
         if epoch % 10 != 0:
-            continue
+             continue
 
         # Save Checkpoint
-        save_state(state, run_dir / f"latest.pkl")
+        save_state(state, run_dir / f'latest.pkl')
 
         # Validate
         val_key = persistent_val_key
@@ -156,17 +142,16 @@ if __name__ == "__main__":
             metrics, out = test_step(batch, state, subkey, net)
 
             for m in metrics:
-                if m not in val_metrics:
-                    val_metrics[m] = []
-                val_metrics[m].append(metrics[m])
+              if m not in val_metrics: val_metrics[m] = []
+              val_metrics[m].append(metrics[m])
 
-            out = jax.tree_map(lambda x: x[0], out)  # Select first example from batch
+            out = jax.tree_map(lambda x: x[0], out) # Select first example from batch
             logging.log_anim(out, f"Animated/{step}", epoch)
-            if "segmentation" in out:
-                logging.log_segmentation(out, f"Segmentation/{step}", epoch)
-            if "offsets" in out:
-                logging.log_offset_field(out, f"Offsets/{step}", epoch)
-            if "edge" in out:
-                logging.log_edge(out, f"Edge/{step}", epoch)
+            if 'segmentation' in out:
+                logging.log_segmentation(out, f'Segmentation/{step}', epoch)
+            if 'offsets' in out:
+                logging.log_offset_field(out, f'Offsets/{step}', epoch)
+            if 'edge' in out:
+                logging.log_edge(out, f'Edge/{step}', epoch)
 
-        logging.log_metrics(val_metrics, "val", epoch)
+        logging.log_metrics(val_metrics, 'val', epoch)

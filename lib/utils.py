@@ -16,14 +16,12 @@ import pickle
 
 class TrainingState(NamedTuple):
     params: hk.Params
-    buffers: hk.State
     opt: optax.OptState
 
 
-def changed_state(state, params=None, buffers=None, opt=None):
+def changed_state(state, params=None, opt=None):
     return TrainingState(
         params=state.params if params is None else params,
-        buffers=state.buffers if buffers is None else buffers,
         opt=state.opt if opt is None else opt,
     )
 

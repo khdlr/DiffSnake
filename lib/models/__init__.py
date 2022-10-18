@@ -1,23 +1,21 @@
-from .cobra import COBRA
-from .unet import UNet
-from .calfin import CFM
-from .hed_unet import HEDUNet
-from .rupprecht_dac import RupprechtDAC, RupprechtUNetDAC
-from .dance import DANCE
-from .deepsnake import DeepSnake
+from .snakediff import SnakeDiffusion
 
 import jax
 import haiku as hk
-from inspect import signature
+from collections import namedtuple
 
-def get_model(config, dummy_in, seed=jax.random.PRNGKey(39)):
-    model_args = config['model_args']
-    modelclass = globals()[config['model']]
-    if 'vertices' in signature(modelclass).parameters:
-        model_args['vertices'] = config['vertices']
-    model = modelclass(**model_args)
-    model = hk.transform_with_state(model)
+model_type = namedtuple("Model", "get_features predict_next predict")
 
-    params, buffers = model.init(seed, dummy_in[:1], is_training=True)
+def get_model(*dummy_in, seed=jax.random.PRNGKey(39)):
+    def f():
+      model = SnakeDiffusion()
+      def init(x, img, t_emb):
+        img_features = model.get_features(img)
+        prediction = model.predict_next(x, img_features, t_emb)
+        return prediction
+      return init, model_type(model.get_features, model.predict_next, model.predict)
 
-    return model, params, buffers
+    model = hk.multi_transform(f)
+    params = model.init(seed, *jax.tree_map(lambda x: x[:1], dummy_in))
+
+    return model, params

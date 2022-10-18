@@ -37,7 +37,7 @@ FloatStrOrBool = Union[str, float, bool]
 
 
 class BlockV1(hk.Module):
-  """ResNet V1 block with optional bottleneck."""
+  """SlimResNet V1 block with optional bottleneck."""
 
   def __init__(
       self,
@@ -119,7 +119,7 @@ class BlockV1(hk.Module):
 
 
 class BlockV2(hk.Module):
-  """ResNet V2 block with optional bottleneck."""
+  """SlimResNet V2 block with optional bottleneck."""
 
   def __init__(
       self,
@@ -177,7 +177,7 @@ class BlockV2(hk.Module):
           padding="SAME",
           name="conv_2")
 
-      # NOTE: Some implementations of ResNet50 v2 suggest initializing
+      # NOTE: Some implementations of SlimResNet50 v2 suggest initializing
       # gamma/scale here to zeros.
       bn_2 = hk.BatchNorm(name="batchnorm_2", **bn_config)
       layers = layers + ((conv_2, bn_2),)
@@ -198,7 +198,7 @@ class BlockV2(hk.Module):
 
 
 class BlockGroup(hk.Module):
-  """Higher level block for ResNet implementation."""
+  """Higher level block for SlimResNet implementation."""
 
   def __init__(
       self,
@@ -237,44 +237,44 @@ def check_length(length, value, name):
     raise ValueError(f"`{name}` must be of length 4 not {len(value)}")
 
 
-class ResNet(hk.Module):
-  """ResNet model."""
+class SlimResNet(hk.Module):
+  """SlimResNet model."""
 
   CONFIGS = {
       18: {
           "blocks_per_group": (2, 2, 2, 2),
           "bottleneck": False,
-          "channels_per_group": (64, 128, 256, 512),
+          "channels_per_group": (16, 32, 64, 128),
           "use_projection": (False, True, True, True),
       },
       34: {
           "blocks_per_group": (3, 4, 6, 3),
           "bottleneck": False,
-          "channels_per_group": (64, 128, 256, 512),
+          "channels_per_group": (16, 32, 64, 128),
           "use_projection": (False, True, True, True),
       },
       50: {
           "blocks_per_group": (3, 4, 6, 3),
           "bottleneck": True,
-          "channels_per_group": (256, 512, 1024, 2048),
+          "channels_per_group": (16, 32, 64, 128),
           "use_projection": (True, True, True, True),
       },
       101: {
           "blocks_per_group": (3, 4, 23, 3),
           "bottleneck": True,
-          "channels_per_group": (256, 512, 1024, 2048),
+          "channels_per_group": (16, 32, 64, 128),
           "use_projection": (True, True, True, True),
       },
       152: {
           "blocks_per_group": (3, 8, 36, 3),
           "bottleneck": True,
-          "channels_per_group": (256, 512, 1024, 2048),
+          "channels_per_group": (16, 32, 64, 128),
           "use_projection": (True, True, True, True),
       },
       200: {
           "blocks_per_group": (3, 24, 36, 3),
           "bottleneck": True,
-          "channels_per_group": (256, 512, 1024, 2048),
+          "channels_per_group": (16, 32, 64, 128),
           "use_projection": (True, True, True, True),
       },
   }
@@ -295,7 +295,7 @@ class ResNet(hk.Module):
       name: Optional[str] = None,
       initial_conv_config: Optional[Mapping[str, FloatStrOrBool]] = None,
   ):
-    """Constructs a ResNet model.
+    """Constructs a SlimResNet model.
 
     Args:
       blocks_per_group: A sequence of length 4 that indicates the number of
@@ -303,7 +303,7 @@ class ResNet(hk.Module):
       bn_config: A dictionary of two elements, ``decay_rate`` and ``eps`` to be
         passed on to the :class:`~haiku.BatchNorm` layers. By default the
         ``decay_rate`` is ``0.9`` and ``eps`` is ``1e-5``.
-      resnet_v2: Whether to use the v1 or v2 ResNet implementation. Defaults to
+      resnet_v2: Whether to use the v1 or v2 SlimResNet implementation. Defaults to
         ``False``.
       bottleneck: Whether the block should bottleneck or not. Defaults to
         ``True``.
@@ -329,12 +329,12 @@ class ResNet(hk.Module):
     logits_config.setdefault("w_init", jnp.zeros)
     logits_config.setdefault("name", "logits")
 
-    # Number of blocks in each group for ResNet.
+    # Number of blocks in each group for SlimResNet.
     check_length(4, blocks_per_group, "blocks_per_group")
     check_length(4, channels_per_group, "channels_per_group")
 
     initial_conv_config = dict(initial_conv_config or {})
-    initial_conv_config.setdefault("output_channels", 64)
+    initial_conv_config.setdefault("output_channels", 16)
     initial_conv_config.setdefault("kernel_shape", 7)
     initial_conv_config.setdefault("stride", 2)
     initial_conv_config.setdefault("with_bias", False)
@@ -381,8 +381,8 @@ class ResNet(hk.Module):
     return xs
 
 
-class ResNet18(ResNet):
-  """ResNet18."""
+class SlimResNet18(SlimResNet):
+  """SlimResNet18."""
 
   def __init__(
       self,
@@ -392,12 +392,12 @@ class ResNet18(ResNet):
       name: Optional[str] = None,
       initial_conv_config: Optional[Mapping[str, FloatStrOrBool]] = None,
   ):
-    """Constructs a ResNet model.
+    """Constructs a SlimResNet model.
 
     Args:
       bn_config: A dictionary of two elements, ``decay_rate`` and ``eps`` to be
         passed on to the :class:`~haiku.BatchNorm` layers.
-      resnet_v2: Whether to use the v1 or v2 ResNet implementation. Defaults
+      resnet_v2: Whether to use the v1 or v2 SlimResNet implementation. Defaults
         to ``False``.
       logits_config: A dictionary of keyword arguments for the logits layer.
       name: Name of the module.
@@ -409,11 +409,11 @@ class ResNet18(ResNet):
                      resnet_v2=resnet_v2,
                      logits_config=logits_config,
                      name=name,
-                     **ResNet.CONFIGS[18])
+                     **SlimResNet.CONFIGS[18])
 
 
-class ResNet34(ResNet):
-  """ResNet34."""
+class SlimResNet34(SlimResNet):
+  """SlimResNet34."""
 
   def __init__(
       self,
@@ -423,12 +423,12 @@ class ResNet34(ResNet):
       name: Optional[str] = None,
       initial_conv_config: Optional[Mapping[str, FloatStrOrBool]] = None,
   ):
-    """Constructs a ResNet model.
+    """Constructs a SlimResNet model.
 
     Args:
       bn_config: A dictionary of two elements, ``decay_rate`` and ``eps`` to be
         passed on to the :class:`~haiku.BatchNorm` layers.
-      resnet_v2: Whether to use the v1 or v2 ResNet implementation. Defaults
+      resnet_v2: Whether to use the v1 or v2 SlimResNet implementation. Defaults
         to ``False``.
       logits_config: A dictionary of keyword arguments for the logits layer.
       name: Name of the module.
@@ -440,11 +440,11 @@ class ResNet34(ResNet):
                      resnet_v2=resnet_v2,
                      logits_config=logits_config,
                      name=name,
-                     **ResNet.CONFIGS[34])
+                     **SlimResNet.CONFIGS[34])
 
 
-class ResNet50(ResNet):
-  """ResNet50."""
+class SlimResNet50(SlimResNet):
+  """SlimResNet50."""
 
   def __init__(
       self,
@@ -454,12 +454,12 @@ class ResNet50(ResNet):
       name: Optional[str] = None,
       initial_conv_config: Optional[Mapping[str, FloatStrOrBool]] = None,
   ):
-    """Constructs a ResNet model.
+    """Constructs a SlimResNet model.
 
     Args:
       bn_config: A dictionary of two elements, ``decay_rate`` and ``eps`` to be
         passed on to the :class:`~haiku.BatchNorm` layers.
-      resnet_v2: Whether to use the v1 or v2 ResNet implementation. Defaults
+      resnet_v2: Whether to use the v1 or v2 SlimResNet implementation. Defaults
         to ``False``.
       logits_config: A dictionary of keyword arguments for the logits layer.
       name: Name of the module.
@@ -471,11 +471,11 @@ class ResNet50(ResNet):
                      resnet_v2=resnet_v2,
                      logits_config=logits_config,
                      name=name,
-                     **ResNet.CONFIGS[50])
+                     **SlimResNet.CONFIGS[50])
 
 
-class ResNet101(ResNet):
-  """ResNet101."""
+class SlimResNet101(SlimResNet):
+  """SlimResNet101."""
 
   def __init__(
       self,
@@ -485,12 +485,12 @@ class ResNet101(ResNet):
       name: Optional[str] = None,
       initial_conv_config: Optional[Mapping[str, FloatStrOrBool]] = None,
   ):
-    """Constructs a ResNet model.
+    """Constructs a SlimResNet model.
 
     Args:
       bn_config: A dictionary of two elements, ``decay_rate`` and ``eps`` to be
         passed on to the :class:`~haiku.BatchNorm` layers.
-      resnet_v2: Whether to use the v1 or v2 ResNet implementation. Defaults
+      resnet_v2: Whether to use the v1 or v2 SlimResNet implementation. Defaults
         to ``False``.
       logits_config: A dictionary of keyword arguments for the logits layer.
       name: Name of the module.
@@ -502,11 +502,11 @@ class ResNet101(ResNet):
                      resnet_v2=resnet_v2,
                      logits_config=logits_config,
                      name=name,
-                     **ResNet.CONFIGS[101])
+                     **SlimResNet.CONFIGS[101])
 
 
-class ResNet152(ResNet):
-  """ResNet152."""
+class SlimResNet152(SlimResNet):
+  """SlimResNet152."""
 
   def __init__(
       self,
@@ -516,12 +516,12 @@ class ResNet152(ResNet):
       name: Optional[str] = None,
       initial_conv_config: Optional[Mapping[str, FloatStrOrBool]] = None,
   ):
-    """Constructs a ResNet model.
+    """Constructs a SlimResNet model.
 
     Args:
       bn_config: A dictionary of two elements, ``decay_rate`` and ``eps`` to be
         passed on to the :class:`~haiku.BatchNorm` layers.
-      resnet_v2: Whether to use the v1 or v2 ResNet implementation. Defaults
+      resnet_v2: Whether to use the v1 or v2 SlimResNet implementation. Defaults
         to ``False``.
       logits_config: A dictionary of keyword arguments for the logits layer.
       name: Name of the module.
@@ -533,11 +533,11 @@ class ResNet152(ResNet):
                      resnet_v2=resnet_v2,
                      logits_config=logits_config,
                      name=name,
-                     **ResNet.CONFIGS[152])
+                     **SlimResNet.CONFIGS[152])
 
 
-class ResNet200(ResNet):
-  """ResNet200."""
+class SlimResNet200(SlimResNet):
+  """SlimResNet200."""
 
   def __init__(
       self,
@@ -547,12 +547,12 @@ class ResNet200(ResNet):
       name: Optional[str] = None,
       initial_conv_config: Optional[Mapping[str, FloatStrOrBool]] = None,
   ):
-    """Constructs a ResNet model.
+    """Constructs a SlimResNet model.
 
     Args:
       bn_config: A dictionary of two elements, ``decay_rate`` and ``eps`` to be
         passed on to the :class:`~haiku.BatchNorm` layers.
-      resnet_v2: Whether to use the v1 or v2 ResNet implementation. Defaults
+      resnet_v2: Whether to use the v1 or v2 SlimResNet implementation. Defaults
         to ``False``.
       logits_config: A dictionary of keyword arguments for the logits layer.
       name: Name of the module.
@@ -564,5 +564,5 @@ class ResNet200(ResNet):
                      resnet_v2=resnet_v2,
                      logits_config=logits_config,
                      name=name,
-                     **ResNet.CONFIGS[200])
+                     **SlimResNet.CONFIGS[200])
 
