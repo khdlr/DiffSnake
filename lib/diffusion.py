@@ -42,6 +42,6 @@ def ddim_sample(model, params, img_features, timesteps, init):
 
   step_vars = (timesteps[:-1], timesteps[1:])
   # Vmap over samples axis
-  inference_step = jax.vmap(inference_step, in_axes=[1, None])
+  inference_step = jax.vmap(inference_step, in_axes=[1, None], out_axes=1)
   final, steps = jax.lax.scan(inference_step, init, step_vars)
   return rearrange(steps, 'diffusion_step B S T C -> B S diffusion_step T C')

@@ -135,8 +135,8 @@ if __name__ == '__main__':
         # Validate
         for mode, loader in [('trainval', trainval_loader), ('val', val_loader)]:
           val_key = persistent_val_key
-          val_metrics = defaultdict()
-          for step, batch in enumerate(tqdm(val_loader)):
+          val_metrics = defaultdict(list)
+          for step, batch in enumerate(tqdm(loader)):
               val_key, subkey = jax.random.split(val_key)
               metrics, out = test_step(batch, state, subkey, net)
 
