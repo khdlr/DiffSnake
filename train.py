@@ -93,6 +93,7 @@ if __name__ == '__main__':
     train_key, subkey = jax.random.split(train_key)
     B = config.batch_size
     train_loader = get_loader(B, 4, 'train', config, subkey)
+    trainval_loader = get_loader(4, 1, 'train', config, None, subtiles=False)
     val_loader   = get_loader(4, 1, 'validation', config, None, subtiles=False)
 
     img, mask, contour = prep(next(iter(train_loader)))
@@ -132,17 +133,20 @@ if __name__ == '__main__':
         save_state(state, run_dir / f'latest.pkl')
 
         # Validate
-        val_key = persistent_val_key
-        val_metrics = {}
-        for step, batch in enumerate(tqdm(val_loader)):
-            val_key, subkey = jax.random.split(val_key)
-            metrics, out = test_step(batch, state, subkey, net)
+        for mode, loader in [('trainval', trainval_loader), ('val', val_loader)]:
+          val_key = persistent_val_key
+          val_metrics = defaultdict()
+          for step, batch in enumerate(tqdm(val_loader)):
+              val_key, subkey = jax.random.split(val_key)
+              metrics, out = test_step(batch, state, subkey, net)
 
-            for m in metrics:
-              if m not in val_metrics: val_metrics[m] = []
-              val_metrics[m].append(metrics[m])
+              for m in metrics:
+                val_metrics[m].append(metrics[m])
 
-            out = jax.tree_map(lambda x: x[0], out) # Select first example from batch
-            logging.log_anim(out, f"Animated/{step}", epoch)
+              out = jax.tree_map(lambda x: x[0], out) # Select first example from batch
+              logging.log_anim(out, f"Animated_{mode}/{step}", epoch)
 
-        logging.log_metrics(val_metrics, 'val', epoch)
+              if mode == 'trainval' and step >= 5:
+                break
+
+          logging.log_metrics(val_metrics, mode, epoch)
