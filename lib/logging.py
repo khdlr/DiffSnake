@@ -115,8 +115,9 @@ def make_path_string(vertices):
 def animated_path(paths):
     pathvalues = ";".join(make_path_string(path) for path in paths)
     keytimes = np.linspace(0, 0.8, len(paths))
-    keytimes[-1] = 1.0
-    keytimes = ";".join(f"{x:.4f}" for x in keytimes)
+    # Still frame of final pred
+    keytimes = ";".join(f"{x:.4f}" for x in keytimes) + ';1.0'
+    pathvalues += ';' + make_path_string(paths[-1])
     return f"""<path fill="none" stroke="rgb(255, 0, 0)" stroke-width="1">
           <animate attributeName="d" values="{pathvalues}" keyTimes="{keytimes}" dur="10s" repeatCount="indefinite" />
           </path>
