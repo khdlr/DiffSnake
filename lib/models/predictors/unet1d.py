@@ -8,33 +8,39 @@ from ... import config
 class UNet1D:
   def __init__(self):
     cfg = config.model.predictor
-    self.width = cfg.width
-    self.depth = cfg.depth
+    self.channel_seq = cfg.channel_seq
+    self.attn_channels = cfg.attn_channels
 
   def __call__(self, x, t_emb):
-    skip_connections = []
 
-    W = self.width
-    channel_seq = [W * 2**i for i in range(self.depth)]
-    for channels in channel_seq:
-      x = ResBlock(x, t_emb, channels)
-      x = ResBlock(x, t_emb, channels)
+    inout = list(zip(self.channel_seq, self.channel_seq[1:]))
+    x = hk.Conv1D(self.channel_seq[0], 5, padding='SAME', with_bias=False)(x)
+
+    skip_connections = [x]
+    for c_in, c_out in inout:
+      x = ResBlock(x, t_emb, c_in)
+      x = ResBlock(x, t_emb, c_in)
+      if c_in in self.attn_channels:
+        x = x + MHA(c_in)(x, x, x)
+
+      x = hk.Conv1D(c_out, 2, 2, padding='SAME')(x)
       skip_connections.append(x)
-      x = hk.max_pool(x, 2, 2, padding='SAME')
 
-    x = ResBlock(x, t_emb, 2 * channel_seq[-1])
-    x = ResBlock(x, t_emb, 2 * channel_seq[-1])
+    jax.tree_map(lambda x: x.shape, skip_connections)
 
-    for channels, skip in zip(reversed(channel_seq), reversed(skip_connections)):
-      B,  T,  C  = x.shape
-      B_, T_, C_ = skip.shape
+    C = self.channel_seq[-1]
+    x = ResBlock(x, t_emb, C)
+    x = x + MHA(C)(x, x, x)
+    x = ResBlock(x, t_emb, C)
 
-      upsampled = jax.image.resize(x, [B, T_, C], method='bilinear')
-      x = hk.Conv1D(C_, 2, with_bias=False)(upsampled)
+    for (c_out, _), skip in zip(reversed(inout), reversed(skip_connections)):
+      x = ResBlock(x + skip, t_emb, c_out)
+      x = ResBlock(x, t_emb, c_out)
+      if c_out in self.attn_channels:
+        x = x + MHA(c_out)(x, x, x)
       x = LayerNorm()(x)
       x = jax.nn.silu(x)
-      x = ResBlock(jnp.concatenate([x, skip], axis=-1), t_emb, channels)
-      x = ResBlock(x, t_emb, channels)
+      x = hk.Conv1DTranspose(c_out, 2, 2, with_bias=False)(x)
 
     x = hk.Conv1D(2, 1, with_bias=False, w_init=jnp.zeros)(x)
     return x
@@ -64,3 +70,8 @@ def ResBlock(x, t_emb, channels):
   x = hk.Conv1D(channels, 3, with_bias=False)(x)
 
   return x + skip
+
+
+def MHA(channels):
+  n_heads = channels // 64
+  return hk.MultiHeadAttention(n_heads, channels // n_heads, w_init=hk.initializers.TruncatedNormal())

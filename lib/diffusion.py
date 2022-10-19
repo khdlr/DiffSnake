@@ -32,11 +32,11 @@ def ddim_sample(model, params, img_features, timesteps, init):
     a_t, a_tm1 = get_alpha(t), get_alpha(tm1)
 
     eps = model.predict_next(params, x_t, img_features, t)
-    x0_est = x_t - eps * jnp.sqrt(1 - a_t)
+    x0_est = (x_t - eps * jnp.sqrt(1 - a_t)) / jnp.sqrt(a_t)
     x_tm1 = jnp.sqrt(a_tm1) * x0_est + jnp.sqrt(1 - a_tm1) * eps
 
     # Clipping
-    x_tm1 = jnp.clip(x_tm1, -1, 1)
+    # x_tm1 = jnp.clip(x_tm1, -1, 1)
 
     return x_tm1, x_tm1
 

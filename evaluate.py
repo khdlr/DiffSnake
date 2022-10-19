@@ -22,11 +22,11 @@ METRICS = dict(
 def test_step(batch, state, key, model):
     imagery, mask, contour = prep(batch)
     B = imagery.shape[0]
-    S = 1
+    S = 4
 
     original_contour = contour
     contour = repeat(contour, 'B T C -> B S T C', S=S)
-    ts = repeat(jnp.linspace(0, 1000, 50), 'T -> T B', B=B)
+    ts = repeat(jnp.linspace(1000, 0, 50), 'T -> T B', B=B)
     init = jax.random.normal(key, contour.shape)
 
     img_features = model.get_features(state.params, imagery)

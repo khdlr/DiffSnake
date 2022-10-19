@@ -15,7 +15,7 @@ from tqdm import tqdm
 import sys
 from munch import munchify
 from lib import utils, losses, logging, models, config, diffusion
-from lib.utils import TrainingState, prep, changed_state, save_state
+from lib.utils import TrainingState, prep, changed_state, save_state, load_state
 import lib.models.nnutils as nn
 from evaluate import test_step, METRICS
 from einops import rearrange, repeat
@@ -114,7 +114,7 @@ if __name__ == '__main__':
     with open(run_dir / 'config.yml', 'w') as f:
         f.write(yaml.dump(config, default_flow_style=False))
 
-    for epoch in range(1, 501):
+    for epoch in range(1, 1001):
         wandb.log({f'epoch': epoch}, step=epoch)
         prog = tqdm(train_loader, desc=f'Ep {epoch} Trn')
         trn_metrics = defaultdict(list)
@@ -146,7 +146,7 @@ if __name__ == '__main__':
               out = jax.tree_map(lambda x: x[0], out) # Select first example from batch
               logging.log_anim(out, f"Animated_{mode}/{step}", epoch)
 
-              if mode == 'trainval' and step >= 5:
+              if mode == 'trainval' and step >= 8:
                 break
 
           logging.log_metrics(val_metrics, mode, epoch)
