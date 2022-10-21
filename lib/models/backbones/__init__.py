@@ -4,3 +4,4 @@ from .xception import Xception, XceptionTiny, XceptionFast, XceptionPR
 from .calfin_xception import CALFINXception
 from .nextception import Nextception
 from .convnext import ConvNeXt
+from .slim_xception import SlimXception
