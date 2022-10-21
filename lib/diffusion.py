@@ -36,7 +36,7 @@ def ddim_sample(model, params, img_features, timesteps, init):
     x_tm1 = jnp.sqrt(a_tm1) * x0_est + jnp.sqrt(1 - a_tm1) * eps
 
     # Clipping
-    # x_tm1 = jnp.clip(x_tm1, -1, 1)
+    x_tm1 = jnp.clip(x_tm1, -1, 1)
 
     return x_tm1, x_tm1
 

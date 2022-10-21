@@ -46,7 +46,7 @@ def train_step(batch, state, key, net):
   x_0 = repeat(contour, 'B T C -> B S T C', S=diff.snakes_per_image)
   alpha = diffusion.get_alpha(t)
   eps = jax.random.normal(eps_key, x_0.shape)
-  x_t = x_0 * jnp.sqrt(alpha) + eps * jnp.sqrt(1. - alpha)
+  x_t = jnp.clip(x_0 * jnp.sqrt(alpha) + eps * jnp.sqrt(1. - alpha), 0, 1)
   
   def get_loss(params):
     img_features = net.get_features(params, img)
