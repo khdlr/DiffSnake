@@ -42,6 +42,19 @@ class Xception(hk.Module):
         return [skip3, x]
 
 
+class TruncatedXception(hk.Module):
+    """Xception backbone like the one used in CALFIN"""
+    def __call__(self, x):
+        B, H, W, C = x.shape
+
+        # Backbone
+        x, skip1 = XceptionBlock([128, 128, 128], stride=2, return_skip=True)(x)
+        x, skip2 = XceptionBlock([256, 256, 256], stride=2, return_skip=True)(x)
+        x, skip3 = XceptionBlock([768, 768, 768], stride=2, return_skip=True)(x)
+
+        return [skip1, skip2, skip3, x]
+
+
 class XceptionPR(hk.Module):
     """Xception backbone like the one used in CALFIN"""
     def __call__(self, x):
