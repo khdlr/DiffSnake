@@ -46,13 +46,14 @@ def prep(batch, key=None, augment=False, input_types=None):
             augmax.VerticalFlip(),
             augmax.Rotate90(),
             augmax.Rotate(15),
-            # augmax.Warp(coarseness=16)
+            augmax.Warp(coarseness=16, strength=2),
         ]
     ops += [augmax.ByteToFloat()]
-    # if augment: ops += [
-    #     augmax.ChannelShuffle(p=0.1),
-    #     augmax.Solarization(p=0.1),
-    # ]
+    if augment: ops += [
+            augmax.RandomBrightness(p=1.),
+            augmax.RandomContrast(p=1.),
+            augmax.GaussianBlur(sigma=2)
+    ]
 
     if input_types is None:
         input_types = [
@@ -65,7 +66,7 @@ def prep(batch, key=None, augment=False, input_types=None):
         key = jax.random.PRNGKey(0)
     subkeys = jax.random.split(key, batch[0].shape[0])
     transformation = jax.vmap(chain)
-    outputs = list(transformation(subkeys, *batch))
+    outputs = transformation(subkeys, list(batch))
     for i, typ in enumerate(input_types):
         if typ == augmax.InputType.CONTOUR:
             outputs[i] = 2 * (outputs[i] / outputs[0].shape[1]) - 1.0
